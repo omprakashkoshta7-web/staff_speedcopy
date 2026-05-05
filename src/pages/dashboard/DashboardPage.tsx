@@ -3,7 +3,8 @@ import {
   ClipboardList, TrendingUp, AlertTriangle, Clock,
   CheckCircle, Package, Users, RefreshCw,
   ArrowRight, Zap, ShoppingCart, Activity,
-  ChevronRight, Circle,
+  ChevronRight, Circle, Gift, Tag, Percent,
+  BarChart3, Calendar,
 } from "lucide-react";
 import { useStaffRole } from "../../context/StaffContext";
 import { useEffect, useState } from "react";
@@ -51,6 +52,11 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+
+  // Marketing analytics state
+  type Coupon = { _id: string; code: string; discountType: string; discountValue: number; isActive: boolean; usedCount: number; usageLimit: number; expiresAt?: string; applicableFlows?: string[]; createdAt: string; };
+  const [coupons, setCoupons] = useState<Coupon[]>([]);
+  const [couponLoading, setCouponLoading] = useState(false);
   const rc = ROLE_CONFIG[role] || ROLE_CONFIG.ops;
   const RoleIcon = ROLE_ICON[role] || Activity;
 
@@ -59,8 +65,9 @@ export default function DashboardPage() {
     setError("");
     try {
       const promises: Promise<any>[] = [staffService.getDashboard(role)];
-      if (role === "ops") promises.push(staffService.getOrderQueue().catch(() => ({ success: false, data: [] })));
-      const [dashResult, ordersResult] = await Promise.all(promises);
+      if (role === "ops")       promises.push(staffService.getOrderQueue().catch(() => ({ success: false, data: [] })));
+      if (role === "marketing") promises.push(staffService.getCoupons({ page: 1, limit: 100 }).catch(() => ({ data: [] })));
+      const [dashResult, extraResult] = await Promise.all(promises);
 
       if (dashResult?.success && dashResult?.data) {
         setDashData({
@@ -72,17 +79,22 @@ export default function DashboardPage() {
         setError(dashResult?.message || "Dashboard data unavailable");
       }
 
-      if (role === "ops" && ordersResult?.success) {
-        const orders: any[] = Array.isArray(ordersResult.data) ? ordersResult.data : [];
+      if (role === "ops" && extraResult?.success) {
+        const orders: any[] = Array.isArray(extraResult.data) ? extraResult.data : [];
         setOrderStats({
           total:    orders.length,
           critical: orders.filter((o: any) => o.risk === "critical").length,
           pending:  orders.filter((o: any) => o.rawStatus === "pending" || o.rawStatus === "assigned_vendor").length,
         });
       }
+
+      if (role === "marketing" && extraResult) {
+        const list = extraResult?.data?.coupons ?? extraResult?.data ?? extraResult?.coupons ?? [];
+        setCoupons(Array.isArray(list) ? list : []);
+      }
     } catch (err: any) {
       setError(err?.message || "Failed to load dashboard data");
-    } finally { setLoading(false); setRefreshing(false); }
+    } finally { setLoading(false); setRefreshing(false); setCouponLoading(false); }
   };
 
   useEffect(() => { void loadData(); }, [role]);
@@ -112,6 +124,33 @@ export default function DashboardPage() {
       </div>
     </div>
   );
+
+  // ── Marketing: show only coupon analytics ──
+  if (role === "marketing") {
+    return (
+      <div className="space-y-6">
+        {/* TOOLBAR */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ backgroundColor: rc.bg }}>
+              <RoleIcon size={17} style={{ color: rc.color }} />
+            </div>
+            <div>
+              <p className="text-sm font-black text-gray-900">Marketing Dashboard</p>
+              <p className="text-xs text-gray-400">{new Date().toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}</p>
+            </div>
+          </div>
+          <button onClick={() => void loadData(true)} disabled={refreshing}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-200 hover:border-gray-400 transition text-sm font-semibold text-gray-600 disabled:opacity-50">
+            <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
+            Refresh
+          </button>
+        </div>
+        {/* COUPON ANALYTICS */}
+        <MarketingAnalytics coupons={coupons} loading={couponLoading} navigate={navigate} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -354,6 +393,226 @@ export default function DashboardPage() {
         </div>
       </div>
 
+    </div>
+  );
+}
+
+// ══════════════════════════════════════
+// MARKETING ANALYTICS COMPONENT
+// ══════════════════════════════════════
+type MCoupon = { _id: string; code: string; discountType: string; discountValue: number; isActive: boolean; usedCount: number; usageLimit: number; expiresAt?: string; applicableFlows?: string[]; createdAt: string; };
+
+function MarketingAnalytics({ coupons, loading, navigate }: { coupons: MCoupon[]; loading: boolean; navigate: (r: string) => void }) {
+  const isExpired = (d?: string) => !!d && new Date(d) < new Date();
+
+  const active   = coupons.filter(c => c.isActive && !isExpired(c.expiresAt));
+  const expired  = coupons.filter(c => isExpired(c.expiresAt));
+  const inactive = coupons.filter(c => !c.isActive && !isExpired(c.expiresAt));
+  const totalUses = coupons.reduce((s, c) => s + (c.usedCount || 0), 0);
+  const nearLimit = coupons.filter(c => c.usageLimit > 0 && c.usedCount / c.usageLimit >= 0.8 && c.isActive);
+
+  // flow breakdown
+  const flowMap: Record<string, number> = {};
+  coupons.forEach(c => (c.applicableFlows || []).forEach(f => { flowMap[f] = (flowMap[f] || 0) + 1; }));
+  const flows = Object.entries(flowMap).sort((a, b) => b[1] - a[1]);
+
+  // top used coupons
+  const topCoupons = [...coupons].sort((a, b) => (b.usedCount || 0) - (a.usedCount || 0)).slice(0, 5);
+
+  // expiring soon (within 7 days)
+  const soon = coupons.filter(c => {
+    if (!c.expiresAt || isExpired(c.expiresAt)) return false;
+    return (new Date(c.expiresAt).getTime() - Date.now()) < 7 * 24 * 60 * 60 * 1000;
+  });
+
+  if (loading) return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center shadow-sm">
+      <RefreshCw size={22} className="animate-spin text-amber-400 mx-auto mb-2" />
+      <p className="text-sm text-gray-400">Loading analytics…</p>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+
+      {/* ── Section header ── */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg bg-amber-50 flex items-center justify-center">
+            <BarChart3 size={14} className="text-amber-600" />
+          </div>
+          <span className="text-sm font-bold text-gray-900">Coupon Analytics</span>
+        </div>
+        <button onClick={() => navigate("/marketing/campaigns")}
+          className="flex items-center gap-1.5 text-xs font-bold text-amber-600 hover:text-amber-700 transition">
+          Manage Coupons <ArrowRight size={12} />
+        </button>
+      </div>
+
+      {/* ── KPI row ── */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { icon: Gift,        color: "#8b5cf6", bg: "#f5f3ff", value: coupons.length, label: "Total Coupons" },
+          { icon: CheckCircle, color: "#10b981", bg: "#f0fdf4", value: active.length,  label: "Active" },
+          { icon: TrendingUp,  color: "#3b82f6", bg: "#eff6ff", value: totalUses,      label: "Total Uses" },
+          { icon: AlertTriangle, color: "#ef4444", bg: "#fef2f2", value: nearLimit.length, label: "Near Limit" },
+        ].map(({ icon: Icon, color, bg, value, label }) => (
+          <div key={label} className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-3" style={{ backgroundColor: bg }}>
+              <Icon size={16} style={{ color }} />
+            </div>
+            <p className="text-2xl font-black text-gray-900 leading-none">{value}</p>
+            <p className="text-xs text-gray-400 font-medium mt-1">{label}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Status breakdown + Flow breakdown ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+        {/* Status breakdown */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="flex items-center gap-2.5 px-5 py-4 border-b border-gray-100">
+            <div className="w-7 h-7 rounded-lg bg-purple-50 flex items-center justify-center">
+              <Percent size={13} className="text-purple-600" />
+            </div>
+            <span className="text-sm font-bold text-gray-900">Status Breakdown</span>
+          </div>
+          <div className="p-5 space-y-3">
+            {[
+              { label: "Active",   value: active.length,   color: "#10b981", bg: "#f0fdf4", pct: coupons.length ? Math.round(active.length / coupons.length * 100) : 0 },
+              { label: "Inactive", value: inactive.length, color: "#6b7280", bg: "#f3f4f6", pct: coupons.length ? Math.round(inactive.length / coupons.length * 100) : 0 },
+              { label: "Expired",  value: expired.length,  color: "#ef4444", bg: "#fef2f2", pct: coupons.length ? Math.round(expired.length / coupons.length * 100) : 0 },
+            ].map(({ label, value, color, bg, pct }) => (
+              <div key={label}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
+                    <span className="text-xs font-semibold text-gray-700">{label}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-gray-900">{value}</span>
+                    <span className="text-xs text-gray-400">{pct}%</span>
+                  </div>
+                </div>
+                <div className="w-full bg-gray-100 rounded-full h-1.5">
+                  <div className="h-1.5 rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: color }} />
+                </div>
+              </div>
+            ))}
+            {coupons.length === 0 && (
+              <p className="text-xs text-gray-400 text-center py-4">No coupons yet</p>
+            )}
+          </div>
+        </div>
+
+        {/* Flow breakdown */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="flex items-center gap-2.5 px-5 py-4 border-b border-gray-100">
+            <div className="w-7 h-7 rounded-lg bg-blue-50 flex items-center justify-center">
+              <Tag size={13} className="text-blue-600" />
+            </div>
+            <span className="text-sm font-bold text-gray-900">By Flow</span>
+          </div>
+          <div className="p-5">
+            {flows.length === 0 ? (
+              <p className="text-xs text-gray-400 text-center py-4">No flow data</p>
+            ) : (
+              <div className="space-y-3">
+                {flows.map(([flow, count]) => (
+                  <div key={flow} className="flex items-center justify-between">
+                    <span className="px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-semibold capitalize">{flow}</span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-24 bg-gray-100 rounded-full h-1.5">
+                        <div className="h-1.5 rounded-full bg-blue-400"
+                          style={{ width: `${Math.round(count / coupons.length * 100)}%` }} />
+                      </div>
+                      <span className="text-xs font-bold text-gray-700 w-4 text-right">{count}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Top used + Expiring soon ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+        {/* Top used coupons */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="flex items-center gap-2.5 px-5 py-4 border-b border-gray-100">
+            <div className="w-7 h-7 rounded-lg bg-green-50 flex items-center justify-center">
+              <TrendingUp size={13} className="text-green-600" />
+            </div>
+            <span className="text-sm font-bold text-gray-900">Top Used Coupons</span>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {topCoupons.length === 0 ? (
+              <p className="text-xs text-gray-400 text-center py-8">No usage data</p>
+            ) : topCoupons.map((c, i) => {
+              const pct = c.usageLimit > 0 ? Math.min(100, Math.round(c.usedCount / c.usageLimit * 100)) : 0;
+              return (
+                <div key={c._id} className="flex items-center gap-3 px-5 py-3">
+                  <span className="text-xs font-black text-gray-300 w-4">#{i + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-gray-900 font-mono truncate">{c.code}</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <div className="flex-1 bg-gray-100 rounded-full h-1">
+                        <div className="h-1 rounded-full"
+                          style={{ width: `${pct}%`, backgroundColor: pct >= 90 ? "#ef4444" : "#8b5cf6" }} />
+                      </div>
+                      <span className="text-xs text-gray-500 whitespace-nowrap">{c.usedCount} uses</span>
+                    </div>
+                  </div>
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${c.isActive ? "bg-green-50 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                    {c.isActive ? "Active" : "Off"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Expiring soon */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-orange-50 flex items-center justify-center">
+                <Calendar size={13} className="text-orange-500" />
+              </div>
+              <span className="text-sm font-bold text-gray-900">Expiring Soon</span>
+            </div>
+            {soon.length > 0 && (
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-orange-50 text-orange-600">{soon.length}</span>
+            )}
+          </div>
+          <div className="divide-y divide-gray-50">
+            {soon.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 gap-1">
+                <CheckCircle size={24} className="text-green-300" />
+                <p className="text-xs text-gray-400">No coupons expiring in 7 days</p>
+              </div>
+            ) : soon.map(c => {
+              const daysLeft = Math.ceil((new Date(c.expiresAt!).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+              return (
+                <div key={c._id} className="flex items-center gap-3 px-5 py-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-gray-900 font-mono truncate">{c.code}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {new Date(c.expiresAt!).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                    </p>
+                  </div>
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${daysLeft <= 2 ? "bg-red-50 text-red-600" : "bg-orange-50 text-orange-600"}`}>
+                    {daysLeft}d left
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
