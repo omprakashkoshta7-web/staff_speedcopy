@@ -4,7 +4,8 @@ import {
   CheckCircle, Package, Users, RefreshCw,
   ArrowRight, Zap, ShoppingCart, Activity,
   ChevronRight, Circle, Gift, Tag, Percent,
-  BarChart3, Calendar,
+  BarChart3, Calendar, RotateCcw, BookOpen,
+  DollarSign, TrendingDown,
 } from "lucide-react";
 import { useStaffRole } from "../../context/StaffContext";
 import { useEffect, useState } from "react";
@@ -57,6 +58,14 @@ export default function DashboardPage() {
   type Coupon = { _id: string; code: string; discountType: string; discountValue: number; isActive: boolean; usedCount: number; usageLimit: number; expiresAt?: string; applicableFlows?: string[]; createdAt: string; };
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [couponLoading, setCouponLoading] = useState(false);
+
+  // Finance analytics state
+  type Refund = { id: string; amount: number; status: string; };
+  type LedgerEntry = { id: string; amount: string; type: string; };
+  type Payout = { id: string; status: string; amount: string; };
+  const [refunds,  setRefunds]  = useState<Refund[]>([]);
+  const [ledger,   setLedger]   = useState<LedgerEntry[]>([]);
+  const [payouts,  setPayouts]  = useState<Payout[]>([]);
   const rc = ROLE_CONFIG[role] || ROLE_CONFIG.ops;
   const RoleIcon = ROLE_ICON[role] || Activity;
 
@@ -67,7 +76,14 @@ export default function DashboardPage() {
       const promises: Promise<any>[] = [staffService.getDashboard(role)];
       if (role === "ops")       promises.push(staffService.getOrderQueue().catch(() => ({ success: false, data: [] })));
       if (role === "marketing") promises.push(staffService.getCoupons({ page: 1, limit: 100 }).catch(() => ({ data: [] })));
-      const [dashResult, extraResult] = await Promise.all(promises);
+      if (role === "finance") {
+        promises.push(
+          staffService.getRefunds().catch(() => ({ data: [] })),
+          staffService.getWalletLedger({ page: 1, limit: 50 }).catch(() => ({ data: [] })),
+          staffService.getPayouts().catch(() => ({ data: [] })),
+        );
+      }
+      const [dashResult, extra1, extra2, extra3] = await Promise.all(promises);
 
       if (dashResult?.success && dashResult?.data) {
         setDashData({
@@ -79,8 +95,8 @@ export default function DashboardPage() {
         setError(dashResult?.message || "Dashboard data unavailable");
       }
 
-      if (role === "ops" && extraResult?.success) {
-        const orders: any[] = Array.isArray(extraResult.data) ? extraResult.data : [];
+      if (role === "ops" && extra1?.success) {
+        const orders: any[] = Array.isArray(extra1.data) ? extra1.data : [];
         setOrderStats({
           total:    orders.length,
           critical: orders.filter((o: any) => o.risk === "critical").length,
@@ -88,9 +104,18 @@ export default function DashboardPage() {
         });
       }
 
-      if (role === "marketing" && extraResult) {
-        const list = extraResult?.data?.coupons ?? extraResult?.data ?? extraResult?.coupons ?? [];
+      if (role === "marketing" && extra1) {
+        const list = extra1?.data?.coupons ?? extra1?.data ?? extra1?.coupons ?? [];
         setCoupons(Array.isArray(list) ? list : []);
+      }
+
+      if (role === "finance") {
+        const rList = extra1?.data ?? extra1 ?? [];
+        setRefunds(Array.isArray(rList) ? rList : []);
+        const lList = extra2?.data ?? extra2 ?? [];
+        setLedger(Array.isArray(lList) ? lList : []);
+        const pList = extra3?.data ?? extra3 ?? [];
+        setPayouts(Array.isArray(pList) ? pList : []);
       }
     } catch (err: any) {
       setError(err?.message || "Failed to load dashboard data");
@@ -148,6 +173,33 @@ export default function DashboardPage() {
         </div>
         {/* COUPON ANALYTICS */}
         <MarketingAnalytics coupons={coupons} loading={couponLoading} navigate={navigate} />
+      </div>
+    );
+  }
+
+  // ── Finance: show only finance analytics ──
+  if (role === "finance") {
+    return (
+      <div className="space-y-6">
+        {/* TOOLBAR */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ backgroundColor: rc.bg }}>
+              <RoleIcon size={17} style={{ color: rc.color }} />
+            </div>
+            <div>
+              <p className="text-sm font-black text-gray-900">Finance Dashboard</p>
+              <p className="text-xs text-gray-400">{new Date().toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}</p>
+            </div>
+          </div>
+          <button onClick={() => void loadData(true)} disabled={refreshing}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-200 hover:border-gray-400 transition text-sm font-semibold text-gray-600 disabled:opacity-50">
+            <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
+            Refresh
+          </button>
+        </div>
+        {/* FINANCE ANALYTICS */}
+        <FinanceAnalytics refunds={refunds} ledger={ledger} payouts={payouts} navigate={navigate} />
       </div>
     );
   }
@@ -393,6 +445,214 @@ export default function DashboardPage() {
         </div>
       </div>
 
+    </div>
+  );
+}
+
+// ══════════════════════════════════════
+// FINANCE ANALYTICS COMPONENT
+// ══════════════════════════════════════
+type FRefund  = { id: string; amount: number; status: string; };
+type FLedger  = { id: string; amount: string; type: string; };
+type FPayout  = { id: string; status: string; amount: string; };
+
+function FinanceAnalytics({ refunds, ledger, payouts, navigate }: {
+  refunds: FRefund[]; ledger: FLedger[]; payouts: FPayout[]; navigate: (r: string) => void;
+}) {
+  const STAFF_LIMIT = 500;
+
+  // Refund stats
+  const rPending   = refunds.filter(r => r.status === "pending");
+  const rApproved  = refunds.filter(r => r.status === "approved" || r.status === "completed");
+  const rEscalated = refunds.filter(r => r.status === "escalated");
+  const rOverLimit = rPending.filter(r => r.amount > STAFF_LIMIT);
+  const totalRefundAmt = refunds.reduce((s, r) => s + (r.amount || 0), 0);
+
+  // Ledger stats
+  const credits = ledger.filter(e => e.amount?.startsWith("+"));
+  const debits  = ledger.filter(e => !e.amount?.startsWith("+"));
+  const totalCredit = credits.reduce((s, e) => s + parseFloat(e.amount?.replace(/[^0-9.]/g, "") || "0"), 0);
+  const totalDebit  = debits.reduce((s, e)  => s + parseFloat(e.amount?.replace(/[^0-9.]/g, "") || "0"), 0);
+
+  // Ledger by type
+  const typeMap: Record<string, number> = {};
+  ledger.forEach(e => { if (e.type) typeMap[e.type] = (typeMap[e.type] || 0) + 1; });
+  const topTypes = Object.entries(typeMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  // Payout stats
+  const pScheduled  = payouts.filter(p => p.status === "scheduled").length;
+  const pPaid       = payouts.filter(p => p.status === "paid").length;
+  const pIssue      = payouts.filter(p => p.status === "issue").length;
+  const pProcessing = payouts.filter(p => p.status === "processing").length;
+
+  return (
+    <div className="space-y-4">
+
+      {/* ── KPI row ── */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { icon: RotateCcw,     color: "#d97706", bg: "#fffbeb", value: rPending.length,   label: "Pending Refunds",  link: "/finance/refunds" },
+          { icon: AlertTriangle, color: "#ea580c", bg: "#fff7ed", value: rOverLimit.length, label: "Over ₹500 Limit",  link: "/finance/refunds" },
+          { icon: BookOpen,      color: "#3b82f6", bg: "#eff6ff", value: ledger.length,     label: "Ledger Entries",   link: "/finance/ledger" },
+          { icon: DollarSign,    color: "#ef4444", bg: "#fef2f2", value: pIssue,            label: "Payout Issues",    link: "/finance/payouts" },
+        ].map(({ icon: Icon, color, bg, value, label, link }) => (
+          <div key={label} onClick={() => navigate(link)}
+            className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm hover:shadow-md transition cursor-pointer group">
+            <div className="flex items-start justify-between mb-3">
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ backgroundColor: bg }}>
+                <Icon size={16} style={{ color }} />
+              </div>
+              <ArrowRight size={12} className="text-gray-300 group-hover:text-gray-500 transition mt-1" />
+            </div>
+            <p className="text-2xl font-black text-gray-900 leading-none">{value}</p>
+            <p className="text-xs text-gray-400 font-medium mt-1">{label}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Refunds + Payouts ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+        {/* Refund breakdown */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-green-50 flex items-center justify-center">
+                <RotateCcw size={13} className="text-green-600" />
+              </div>
+              <span className="text-sm font-bold text-gray-900">Refund Queue</span>
+            </div>
+            <button onClick={() => navigate("/finance/refunds")}
+              className="flex items-center gap-1 text-xs font-bold text-green-600 hover:text-green-700">
+              View All <ArrowRight size={11} />
+            </button>
+          </div>
+          <div className="p-5 space-y-3">
+            {[
+              { label: "Pending",   value: rPending.length,   color: "#d97706", bg: "#fffbeb" },
+              { label: "Approved",  value: rApproved.length,  color: "#16a34a", bg: "#f0fdf4" },
+              { label: "Escalated", value: rEscalated.length, color: "#ea580c", bg: "#fff7ed" },
+            ].map(({ label, value, color, bg }) => {
+              const pct = refunds.length ? Math.round(value / refunds.length * 100) : 0;
+              return (
+                <div key={label}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
+                      <span className="text-xs font-semibold text-gray-700">{label}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-gray-900">{value}</span>
+                      <span className="text-xs text-gray-400">{pct}%</span>
+                    </div>
+                  </div>
+                  <div className="w-full bg-gray-100 rounded-full h-1.5">
+                    <div className="h-1.5 rounded-full" style={{ width: `${pct}%`, backgroundColor: color }} />
+                  </div>
+                </div>
+              );
+            })}
+            {refunds.length === 0 && <p className="text-xs text-gray-400 text-center py-3">No refund data</p>}
+            <div className="pt-2 border-t border-gray-50 flex items-center justify-between">
+              <span className="text-xs text-gray-400">Total refund value</span>
+              <span className="text-sm font-black text-gray-900">₹{totalRefundAmt.toLocaleString()}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Payout breakdown */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-blue-50 flex items-center justify-center">
+                <DollarSign size={13} className="text-blue-600" />
+              </div>
+              <span className="text-sm font-bold text-gray-900">Payout Status</span>
+            </div>
+            <button onClick={() => navigate("/finance/payouts")}
+              className="flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-700">
+              View All <ArrowRight size={11} />
+            </button>
+          </div>
+          <div className="p-5">
+            {payouts.length === 0 ? (
+              <p className="text-xs text-gray-400 text-center py-6">No payout data</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { label: "Scheduled",  value: pScheduled,  color: "#3b82f6", bg: "#eff6ff" },
+                  { label: "Processing", value: pProcessing, color: "#f59e0b", bg: "#fffbeb" },
+                  { label: "Paid",       value: pPaid,       color: "#16a34a", bg: "#f0fdf4" },
+                  { label: "Issues",     value: pIssue,      color: "#ef4444", bg: "#fef2f2" },
+                ].map(({ label, value, color, bg }) => (
+                  <div key={label} className="rounded-xl p-3 text-center" style={{ backgroundColor: bg }}>
+                    <p className="text-xl font-black" style={{ color }}>{value}</p>
+                    <p className="text-xs font-semibold mt-0.5" style={{ color }}>{label}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Ledger summary ── */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-blue-50 flex items-center justify-center">
+              <BookOpen size={13} className="text-blue-600" />
+            </div>
+            <span className="text-sm font-bold text-gray-900">Ledger Summary</span>
+          </div>
+          <button onClick={() => navigate("/finance/ledger")}
+            className="flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-700">
+            View Ledger <ArrowRight size={11} />
+          </button>
+        </div>
+        <div className="p-5">
+          {/* Credit / Debit totals */}
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="rounded-xl p-3 text-center bg-green-50">
+              <p className="text-xs font-bold text-green-600 mb-1">Credits</p>
+              <p className="text-lg font-black text-green-700">+₹{totalCredit.toFixed(0)}</p>
+              <p className="text-xs text-green-500">{credits.length} entries</p>
+            </div>
+            <div className="rounded-xl p-3 text-center bg-red-50">
+              <p className="text-xs font-bold text-red-600 mb-1">Debits</p>
+              <p className="text-lg font-black text-red-700">-₹{totalDebit.toFixed(0)}</p>
+              <p className="text-xs text-red-500">{debits.length} entries</p>
+            </div>
+            <div className="rounded-xl p-3 text-center bg-gray-50">
+              <p className="text-xs font-bold text-gray-600 mb-1">Net</p>
+              <p className={`text-lg font-black ${totalCredit - totalDebit >= 0 ? "text-green-700" : "text-red-700"}`}>
+                {totalCredit - totalDebit >= 0 ? "+" : ""}₹{(totalCredit - totalDebit).toFixed(0)}
+              </p>
+              <p className="text-xs text-gray-400">{ledger.length} total</p>
+            </div>
+          </div>
+
+          {/* Top transaction types */}
+          {topTypes.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Top Transaction Types</p>
+              {topTypes.map(([type, count]) => (
+                <div key={type} className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-gray-700 capitalize">{type.replace(/_/g, " ")}</span>
+                  <div className="flex items-center gap-2">
+                    <div className="w-20 bg-gray-100 rounded-full h-1.5">
+                      <div className="h-1.5 rounded-full bg-blue-400"
+                        style={{ width: `${Math.round(count / ledger.length * 100)}%` }} />
+                    </div>
+                    <span className="text-xs font-bold text-gray-600 w-4 text-right">{count}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {ledger.length === 0 && <p className="text-xs text-gray-400 text-center py-3">No ledger data</p>}
+        </div>
+      </div>
     </div>
   );
 }
