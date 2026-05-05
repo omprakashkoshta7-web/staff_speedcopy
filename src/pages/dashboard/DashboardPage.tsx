@@ -550,6 +550,9 @@ function SupportAnalytics({ custTickets, vendorTickets, navigate }: {
         ))}
       </div>
 
+      {/* ── Customer tickets + Vendor tickets ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
         {/* Customer ticket status */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
