@@ -523,7 +523,6 @@ function SupportAnalytics({ custTickets, vendorTickets, navigate }: {
   const priMap: Record<string, number> = {};
   custTickets.forEach(t => { if (t.priority) priMap[t.priority] = (priMap[t.priority] || 0) + 1; });
   const PRI_COLOR: Record<string, string> = { urgent: "#ef4444", high: "#f59e0b", medium: "#3b82f6", low: "#16a34a" };
-  const PRI_BG:    Record<string, string> = { urgent: "#fef2f2", high: "#fffbeb", medium: "#eff6ff", low: "#f0fdf4" };
 
   return (
     <div className="space-y-4">
@@ -572,7 +571,7 @@ function SupportAnalytics({ custTickets, vendorTickets, navigate }: {
               { label: "Open",        value: cOpen,       color: "#3b82f6", bg: "#eff6ff" },
               { label: "In Progress", value: cInProgress, color: "#f59e0b", bg: "#fffbeb" },
               { label: "Resolved",    value: cResolved,   color: "#16a34a", bg: "#f0fdf4" },
-            ].map(({ label, value, color, bg }) => {
+            ].map(({ label, value, color }) => {
               const pct = custTickets.length ? Math.round(value / custTickets.length * 100) : 0;
               return (
                 <div key={label}>
@@ -788,7 +787,7 @@ function FinanceAnalytics({ refunds, ledger, payouts, navigate }: {
               { label: "Pending",   value: rPending.length,   color: "#d97706", bg: "#fffbeb" },
               { label: "Approved",  value: rApproved.length,  color: "#16a34a", bg: "#f0fdf4" },
               { label: "Escalated", value: rEscalated.length, color: "#ea580c", bg: "#fff7ed" },
-            ].map(({ label, value, color, bg }) => {
+            ].map(({ label, value, color }) => {
               const pct = refunds.length ? Math.round(value / refunds.length * 100) : 0;
               return (
                 <div key={label}>
@@ -999,7 +998,7 @@ function MarketingAnalytics({ coupons, loading, navigate }: { coupons: MCoupon[]
               { label: "Active",   value: active.length,   color: "#10b981", bg: "#f0fdf4", pct: coupons.length ? Math.round(active.length / coupons.length * 100) : 0 },
               { label: "Inactive", value: inactive.length, color: "#6b7280", bg: "#f3f4f6", pct: coupons.length ? Math.round(inactive.length / coupons.length * 100) : 0 },
               { label: "Expired",  value: expired.length,  color: "#ef4444", bg: "#fef2f2", pct: coupons.length ? Math.round(expired.length / coupons.length * 100) : 0 },
-            ].map(({ label, value, color, bg, pct }) => (
+            ].map(({ label, value, color, pct }) => (
               <div key={label}>
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center gap-2">
