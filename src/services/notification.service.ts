@@ -17,11 +17,11 @@ export interface NotificationSummary {
   category_counts: Record<string, number>;
 }
 
-const getHeaders = () => {
+const getHeaders = (): Record<string, string> => {
   const token = staffService.getToken();
-  return token
-    ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
-    : { "Content-Type": "application/json" };
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return headers;
 };
 
 const get = async <T>(path: string): Promise<T> => {
