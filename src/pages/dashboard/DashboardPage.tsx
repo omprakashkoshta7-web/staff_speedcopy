@@ -5,7 +5,7 @@ import {
   ArrowRight, Zap, ShoppingCart, Activity,
   ChevronRight, Circle, Gift, Tag, Percent,
   BarChart3, Calendar, RotateCcw, BookOpen,
-  DollarSign, TrendingDown,
+  DollarSign, TrendingDown, HeadphonesIcon, MessageSquare,
 } from "lucide-react";
 import { useStaffRole } from "../../context/StaffContext";
 import { useEffect, useState } from "react";
@@ -66,6 +66,12 @@ export default function DashboardPage() {
   const [refunds,  setRefunds]  = useState<Refund[]>([]);
   const [ledger,   setLedger]   = useState<LedgerEntry[]>([]);
   const [payouts,  setPayouts]  = useState<Payout[]>([]);
+
+  // Support analytics state
+  type STicket = { _id?: string; id?: string; status: string; priority: string; category?: string; createdAt: string; };
+  type VTicket = { id?: string; status: string; priority: string; vendor?: string; };
+  const [custTickets,   setCustTickets]   = useState<STicket[]>([]);
+  const [vendorTickets, setVendorTickets] = useState<VTicket[]>([]);
   const rc = ROLE_CONFIG[role] || ROLE_CONFIG.ops;
   const RoleIcon = ROLE_ICON[role] || Activity;
 
@@ -83,8 +89,13 @@ export default function DashboardPage() {
           staffService.getPayouts().catch(() => ({ data: [] })),
         );
       }
+      if (role === "support") {
+        promises.push(
+          staffService.getTickets().catch(() => ({ success: false, data: [] })),
+          staffService.getVendorTickets().catch(() => ({ success: false, data: [] })),
+        );
+      }
       const [dashResult, extra1, extra2, extra3] = await Promise.all(promises);
-
       if (dashResult?.success && dashResult?.data) {
         setDashData({
           kpis:   Array.isArray(dashResult.data.kpis)   ? dashResult.data.kpis   : [],
@@ -116,6 +127,13 @@ export default function DashboardPage() {
         setLedger(Array.isArray(lList) ? lList : []);
         const pList = extra3?.data ?? extra3 ?? [];
         setPayouts(Array.isArray(pList) ? pList : []);
+      }
+
+      if (role === "support") {
+        const ct = extra1?.data?.tickets ?? extra1?.data ?? extra1 ?? [];
+        setCustTickets(Array.isArray(ct) ? ct : []);
+        const vt = extra2?.data?.tickets ?? extra2?.data ?? extra2 ?? [];
+        setVendorTickets(Array.isArray(vt) ? vt : []);
       }
     } catch (err: any) {
       setError(err?.message || "Failed to load dashboard data");
@@ -200,6 +218,33 @@ export default function DashboardPage() {
         </div>
         {/* FINANCE ANALYTICS */}
         <FinanceAnalytics refunds={refunds} ledger={ledger} payouts={payouts} navigate={navigate} />
+      </div>
+    );
+  }
+
+  // ── Support: show only support analytics ──
+  if (role === "support") {
+    return (
+      <div className="space-y-6">
+        {/* TOOLBAR */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ backgroundColor: rc.bg }}>
+              <RoleIcon size={17} style={{ color: rc.color }} />
+            </div>
+            <div>
+              <p className="text-sm font-black text-gray-900">Support Dashboard</p>
+              <p className="text-xs text-gray-400">{new Date().toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}</p>
+            </div>
+          </div>
+          <button onClick={() => void loadData(true)} disabled={refreshing}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-200 hover:border-gray-400 transition text-sm font-semibold text-gray-600 disabled:opacity-50">
+            <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
+            Refresh
+          </button>
+        </div>
+        {/* SUPPORT ANALYTICS */}
+        <SupportAnalytics custTickets={custTickets} vendorTickets={vendorTickets} navigate={navigate} />
       </div>
     );
   }
@@ -445,6 +490,217 @@ export default function DashboardPage() {
         </div>
       </div>
 
+    </div>
+  );
+}
+
+// ══════════════════════════════════════
+// SUPPORT ANALYTICS COMPONENT
+// ══════════════════════════════════════
+type CSTicket = { _id?: string; id?: string; status: string; priority: string; category?: string; createdAt: string; };
+type CVTicket = { id?: string; status: string; priority: string; vendor?: string; };
+
+function SupportAnalytics({ custTickets, vendorTickets, navigate }: {
+  custTickets: CSTicket[]; vendorTickets: CVTicket[]; navigate: (r: string) => void;
+}) {
+  // Customer ticket stats
+  const cOpen       = custTickets.filter(t => t.status === "open").length;
+  const cInProgress = custTickets.filter(t => t.status === "in_progress").length;
+  const cResolved   = custTickets.filter(t => t.status === "resolved" || t.status === "closed").length;
+  const cUrgent     = custTickets.filter(t => t.priority === "urgent" || t.priority === "high").length;
+
+  // Vendor ticket stats
+  const vOpen       = vendorTickets.filter(t => t.status === "open").length;
+  const vInProgress = vendorTickets.filter(t => t.status === "in_progress").length;
+  const vResolved   = vendorTickets.filter(t => t.status === "resolved" || t.status === "closed").length;
+
+  // Category breakdown
+  const catMap: Record<string, number> = {};
+  custTickets.forEach(t => { if (t.category) catMap[t.category] = (catMap[t.category] || 0) + 1; });
+  const topCats = Object.entries(catMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  // Priority breakdown
+  const priMap: Record<string, number> = {};
+  custTickets.forEach(t => { if (t.priority) priMap[t.priority] = (priMap[t.priority] || 0) + 1; });
+  const PRI_COLOR: Record<string, string> = { urgent: "#ef4444", high: "#f59e0b", medium: "#3b82f6", low: "#16a34a" };
+  const PRI_BG:    Record<string, string> = { urgent: "#fef2f2", high: "#fffbeb", medium: "#eff6ff", low: "#f0fdf4" };
+
+  return (
+    <div className="space-y-4">
+
+      {/* ── KPI row ── */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { icon: MessageSquare, color: "#8b5cf6", bg: "#f5f3ff", value: custTickets.length,   label: "Customer Tickets", link: "/support/tickets" },
+          { icon: AlertTriangle, color: "#ef4444", bg: "#fef2f2", value: cUrgent,              label: "High Priority",    link: "/support/tickets" },
+          { icon: HeadphonesIcon,color: "#3b82f6", bg: "#eff6ff", value: vendorTickets.length, label: "Vendor Tickets",   link: "/support/vendor-tickets" },
+          { icon: Clock,         color: "#f59e0b", bg: "#fffbeb", value: cOpen + vOpen,        label: "Total Open",       link: "/support/tickets" },
+        ].map(({ icon: Icon, color, bg, value, label, link }) => (
+          <div key={label} onClick={() => navigate(link)}
+            className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm hover:shadow-md transition cursor-pointer group">
+            <div className="flex items-start justify-between mb-3">
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ backgroundColor: bg }}>
+                <Icon size={16} style={{ color }} />
+              </div>
+              <ArrowRight size={12} className="text-gray-300 group-hover:text-gray-500 transition mt-1" />
+            </div>
+            <p className="text-2xl font-black text-gray-900 leading-none">{value}</p>
+            <p className="text-xs text-gray-400 font-medium mt-1">{label}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Customer tickets + Vendor tickets ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+        {/* Customer ticket status */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-purple-50 flex items-center justify-center">
+                <MessageSquare size={13} className="text-purple-600" />
+              </div>
+              <span className="text-sm font-bold text-gray-900">Customer Tickets</span>
+            </div>
+            <button onClick={() => navigate("/support/tickets")}
+              className="flex items-center gap-1 text-xs font-bold text-purple-600 hover:text-purple-700">
+              View All <ArrowRight size={11} />
+            </button>
+          </div>
+          <div className="p-5 space-y-3">
+            {[
+              { label: "Open",        value: cOpen,       color: "#3b82f6", bg: "#eff6ff" },
+              { label: "In Progress", value: cInProgress, color: "#f59e0b", bg: "#fffbeb" },
+              { label: "Resolved",    value: cResolved,   color: "#16a34a", bg: "#f0fdf4" },
+            ].map(({ label, value, color, bg }) => {
+              const pct = custTickets.length ? Math.round(value / custTickets.length * 100) : 0;
+              return (
+                <div key={label}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
+                      <span className="text-xs font-semibold text-gray-700">{label}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-gray-900">{value}</span>
+                      <span className="text-xs text-gray-400">{pct}%</span>
+                    </div>
+                  </div>
+                  <div className="w-full bg-gray-100 rounded-full h-1.5">
+                    <div className="h-1.5 rounded-full" style={{ width: `${pct}%`, backgroundColor: color }} />
+                  </div>
+                </div>
+              );
+            })}
+            {custTickets.length === 0 && <p className="text-xs text-gray-400 text-center py-3">No customer tickets</p>}
+          </div>
+        </div>
+
+        {/* Vendor ticket status */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-blue-50 flex items-center justify-center">
+                <HeadphonesIcon size={13} className="text-blue-600" />
+              </div>
+              <span className="text-sm font-bold text-gray-900">Vendor Tickets</span>
+            </div>
+            <button onClick={() => navigate("/support/vendor-tickets")}
+              className="flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-700">
+              View All <ArrowRight size={11} />
+            </button>
+          </div>
+          <div className="p-5">
+            {vendorTickets.length === 0 ? (
+              <p className="text-xs text-gray-400 text-center py-6">No vendor tickets</p>
+            ) : (
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { label: "Open",        value: vOpen,       color: "#3b82f6", bg: "#eff6ff" },
+                  { label: "In Progress", value: vInProgress, color: "#f59e0b", bg: "#fffbeb" },
+                  { label: "Resolved",    value: vResolved,   color: "#16a34a", bg: "#f0fdf4" },
+                ].map(({ label, value, color, bg }) => (
+                  <div key={label} className="rounded-xl p-3 text-center" style={{ backgroundColor: bg }}>
+                    <p className="text-xl font-black" style={{ color }}>{value}</p>
+                    <p className="text-xs font-semibold mt-0.5" style={{ color }}>{label}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Priority breakdown + Category breakdown ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+        {/* Priority breakdown */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="flex items-center gap-2.5 px-5 py-4 border-b border-gray-100">
+            <div className="w-7 h-7 rounded-lg bg-red-50 flex items-center justify-center">
+              <AlertTriangle size={13} className="text-red-500" />
+            </div>
+            <span className="text-sm font-bold text-gray-900">Priority Breakdown</span>
+          </div>
+          <div className="p-5 space-y-3">
+            {Object.entries(priMap).length === 0 ? (
+              <p className="text-xs text-gray-400 text-center py-4">No priority data</p>
+            ) : (
+              ["urgent", "high", "medium", "low"].filter(p => priMap[p]).map(pri => {
+                const count = priMap[pri] || 0;
+                const pct = custTickets.length ? Math.round(count / custTickets.length * 100) : 0;
+                return (
+                  <div key={pri}>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: PRI_COLOR[pri] }} />
+                        <span className="text-xs font-semibold text-gray-700 capitalize">{pri}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-gray-900">{count}</span>
+                        <span className="text-xs text-gray-400">{pct}%</span>
+                      </div>
+                    </div>
+                    <div className="w-full bg-gray-100 rounded-full h-1.5">
+                      <div className="h-1.5 rounded-full" style={{ width: `${pct}%`, backgroundColor: PRI_COLOR[pri] }} />
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Category breakdown */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="flex items-center gap-2.5 px-5 py-4 border-b border-gray-100">
+            <div className="w-7 h-7 rounded-lg bg-purple-50 flex items-center justify-center">
+              <Tag size={13} className="text-purple-600" />
+            </div>
+            <span className="text-sm font-bold text-gray-900">Top Categories</span>
+          </div>
+          <div className="p-5">
+            {topCats.length === 0 ? (
+              <p className="text-xs text-gray-400 text-center py-4">No category data</p>
+            ) : (
+              <div className="space-y-3">
+                {topCats.map(([cat, count]) => (
+                  <div key={cat} className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-gray-700 capitalize">{cat.replace(/_/g, " ")}</span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-20 bg-gray-100 rounded-full h-1.5">
+                        <div className="h-1.5 rounded-full bg-purple-400"
+                          style={{ width: `${Math.round(count / custTickets.length * 100)}%` }} />
+                      </div>
+                      <span className="text-xs font-bold text-gray-600 w-4 text-right">{count}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
