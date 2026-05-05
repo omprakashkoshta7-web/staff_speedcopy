@@ -5,7 +5,7 @@ import {
   ArrowRight, Zap, ShoppingCart, Activity,
   ChevronRight, Circle, Gift, Tag, Percent,
   BarChart3, Calendar, RotateCcw, BookOpen,
-  DollarSign, TrendingDown, HeadphonesIcon, MessageSquare,
+  DollarSign, HeadphonesIcon, MessageSquare,
 } from "lucide-react";
 import { useStaffRole } from "../../context/StaffContext";
 import { useEffect, useState } from "react";
@@ -549,9 +549,6 @@ function SupportAnalytics({ custTickets, vendorTickets, navigate }: {
           </div>
         ))}
       </div>
-
-      {/* ── Customer tickets + Vendor tickets ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
         {/* Customer ticket status */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
